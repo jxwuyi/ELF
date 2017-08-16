@@ -7,7 +7,7 @@ import tqdm
 
 class SimpleGame(Simulator):
     MAX_STATE = 6
-    def __init__(self, id, desc):
+    def __init__(self, id, desc, **args):
         super(SimpleGame, self).__init__(id, desc)
 
     def restart(self):

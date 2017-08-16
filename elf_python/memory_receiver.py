@@ -9,32 +9,35 @@ from collections import deque, Counter, defaultdict, OrderedDict
 
 from .utils import *
 
+import sys
+
 __all__ = ["MemoryReceiver"]
 
 def _initialize_batch_entry(batchsize, v, use_cuda=True):
     if isinstance(v, np.ndarray):
         shape = v.shape
         if v.dtype == 'int32' or v.dtype == 'int64':
-            entry = torch.LongTensor(batchsize, *shape)
+            entry = torch.LongTensor(batchsize, *shape).zero_()
+        elif v.dtype == 'uint8' or v.dtype == 'int8':
+            entry = torch.ByteTensor(batchsize, *shape).zero_()
         else:
-            # entry = np.zeros((batchsize, ) + shape, dtype=v.dtype)
-            entry = torch.FloatTensor(batchsize, *shape)
+            entry = torch.FloatTensor(batchsize, *shape).zero_()
     elif isinstance(v, torch.FloatTensor):
         shape = v.size()
-        entry = torch.FloatTensor(batchsize, *shape)
+        entry = torch.FloatTensor(batchsize, *shape).zero_()
     elif isinstance(v, list):
         entry = np.zeros((batchsize, len(v)), dtype=type(v[0]))
     elif isinstance(v, float):
-        entry = torch.FloatTensor(batchsize)
+        entry = torch.FloatTensor(batchsize).zero_()
     elif isinstance(v, int):
-        entry = torch.LongTensor(batchsize)
+        entry = torch.LongTensor(batchsize).zero_()
     elif isinstance(v, str) or isinstance(v, bytes):
         entry = [None] * batchsize
     else:
         entry = np.zeros((batchsize), dtype=type(v))
 
     # Make it pinned memory
-    if use_cuda and (isinstance(entry, torch.FloatTensor) or isinstance(entry, torch.LongTensor)):
+    if use_cuda and (isinstance(entry, torch.ByteTensor) or isinstance(entry, torch.FloatTensor) or isinstance(entry, torch.LongTensor)):
         entry = entry.pin_memory()
 
     return entry
@@ -66,7 +69,7 @@ def _cpu2gpu(batch_cpu, batch_gpu, allow_incomplete_batch=False):
         batchsize = batch_cpu_t["_batchsize"]
         batch_gpu_t["_batchsize"] = batchsize
         for k in batch_cpu_t.keys():
-            if isinstance(batch_cpu_t[k], (torch.FloatTensor, torch.LongTensor)):
+            if isinstance(batch_cpu_t[k], (torch.FloatTensor, torch.LongTensor, torch.ByteTensor)):
                 if allow_incomplete_batch:
                     if len(batch_cpu_t[k].size()) == 1:
                         batch_gpu_t[k] = batch_cpu_t[k][:batchsize].cuda(async=True)
@@ -82,6 +85,11 @@ def _cpu2gpu(batch_cpu, batch_gpu, allow_incomplete_batch=False):
                         if k not in batch_gpu_t:
                             batch_gpu_t[k] = torch.cuda.LongTensor(batch_cpu_t[k].size())
                         batch_gpu_t[k].copy_(batch_cpu_t[k], async=True)
+
+                    elif isinstance(batch_cpu_t[k], torch.ByteTensor):
+                        if k not in batch_gpu_t:
+                            batch_gpu_t[k] = torch.cuda.ByteTensor(batch_cpu_t[k].size())
+                        batch_gpu_t[k].copy_(batch_cpu_t[k], async=True)
             else:
                 batch_gpu_t[k] = batch_cpu_t[k]
 
@@ -89,14 +97,6 @@ def _make_batch(batch, q, use_cuda=True, allow_incomplete_batch=False):
     ''' Lots of hacks in this function, need to fix in the future.'''
     if "cpu" not in batch:
         batch.update({ "cpu" : [], "gpu" : [] })
-
-    # For input q:
-    # len(q) == T
-    # len(q[t]) == batchsize
-    # q[t][batch_id] is a dict, e.g., q[t][batch_id] = { "s" : np.array, "a" : int, "r" : float }
-
-    # For output:
-    # batch_cpu is a list of dict, e.g., batch_cpu[t] = { "s" : FloatTensor(batchsize, channel, w, h), "a" : FloatTensor(batchsize) }
 
     T = len(q)
     batchsize = len(q[0])
@@ -115,15 +115,33 @@ def _make_batch(batch, q, use_cuda=True, allow_incomplete_batch=False):
             entry, shape = _initialize_batch_cpu(batch_cpu_t, batch_gpu_t, k, v, batchsize, use_cuda=use_cuda)
             if len(shape) == 1:
                 for i in range(batchsize):
-                    entry[i] = q_t[i][k]
+                    if q_t[i][k] is not None:
+                        entry[i] = q_t[i][k]
+                    else:
+                        print('None Received!!! k = {}'.format(k), file=sys.stderr)
             else:
                 # TODO: Remove this once np.array to torch assignment has been implemented.
                 if isinstance(q_t[0][k], np.ndarray):
-                    for i in range(batchsize):
-                        entry[i, :] = torch.from_numpy(q_t[i][k])
+                    try:
+
+                        for i in range(batchsize):
+                            if q_t[i][k] is not None:
+                                entry[i, :] = torch.from_numpy(q_t[i][k])
+                            else:
+                                print('None Received!!! k = {}'.format(k), file=sys.stderr)
+                    except:
+                        print('Error!!!!! Assign Tensor!! k = {}, entry = {}, q_t = {}, batch_size = {}'.format(k, entry.size(), q_t[0][k].shape, batchsize), file=sys.stderr)
+                        raise
                 else:
-                    for i in range(batchsize):
-                        entry[i, :] = q_t[i][k]
+                    try:
+                        for i in range(batchsize):
+                            if q_t[i][k] is not None:
+                                entry[i, :] = q_t[i][k]
+                            else:
+                                print('None Received!!! k = {}'.format(k), file=sys.stderr)
+                    except:
+                        print('Error!!!!! Assign Tensor!! k = {}, entry = {}, type of q_t = {}, batch_size = {}'.format(k, entry.size(), type(q_t[0][k]), batchsize), file=sys.stderr)
+                        raise
 
     # Put things on cuda.
     if use_cuda:
@@ -277,14 +295,15 @@ def ZMQDecoder(receive_data):
 class MemoryReceiver:
     def __init__(self, name, ch, batch_assembler, batch_queue,
                  prompt=None, decoder=ZMQDecoder, allow_incomplete_batch=False,
-                 seq_limits=None, replier=None):
+                 seq_limits=None, replier=None,
+                 use_cuda=True):
         self.name = name
         self.ch = ch
 
         self.batch_assembler = batch_assembler
         self.loop_count = 0
         self.done_flag = None
-        self.use_cuda = torch.cuda.is_available()
+        self.use_cuda = use_cuda and torch.cuda.is_available()
 
         self.batch_queue = batch_queue
         self.prompt = prompt
@@ -308,14 +327,18 @@ class MemoryReceiver:
     def on_data(self, m):
         qs = self.batch_assembler.feed(m)
         if qs is not None:
-            # print("MemoryReceiver[%s] Receive batch!" % self.name)
+            #print("MemoryReceiver[%s] Receive batch!" % self.name)
 
             if self.prompt is not None:
                 queue_size = self.batch_queue.qsize()
                 print(self.prompt["on_draw_batch"] + str(queue_size), end="")
                 sys.stdout.flush()
 
-            self._make_and_send_batch(qs)
+            try:
+                self._make_and_send_batch(qs)
+            except:
+                print('Error!! on_data] [{}]'.format(self.name), file=sys.stderr)
+                raise
 
     def on_incomplete_batch(self):
         ''' Incomplete batch '''
@@ -377,9 +400,20 @@ class MemoryReceiver:
                 self.on_incomplete_batch()
                 continue
 
+            #print("Get a sample")
+
             for data in m:
                 self.loop_count += 1
-                self.on_data(data)
+                #for k, v in data.items():
+                #    if 'next' in k:
+                #        assert (type(v) == np.ndarray), 'Error !!!!! k = {}, type = {}'.format(k, type(v))
+                try:
+                    self.on_data(data)
+                except:
+                    print('Error on on_data(): details as follows:', file=sys.stderr)
+                    for k, v in data.items():
+                        print('k = {}, type = {}'.format(k, type(v)), file=sys.stderr)
+                    raise
 
             counter += 1
             if counter % check_interval == 0:
@@ -403,4 +437,3 @@ class MemoryReceiver:
         if self.prompt is not None:
             print(self.prompt["on_release_batch"], end="")
             sys.stdout.flush()
-

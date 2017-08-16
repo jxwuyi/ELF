@@ -84,12 +84,12 @@ class Simulator(mp.Process):
                     reply_format[name] = v["reply"]
 
             # Send all.
-            # print("[%s]: Before send ..." % agent_name)
+            #print("[%s]: Before send ..." % self.agent_name)
             SendAll(send_chs, data)
 
             # Wait for receive if there is any. Note that if there are multiple
             # desc, then we need to wait simultaneously.
-            # print("[%s]: Before wait reply ..." % agent_name)
+            #print("[%s]: Before wait reply ..." % self.agent_name)
             replies = WaitAll(reply_chs)
 
             # Set all the keys.
@@ -105,4 +105,3 @@ class Simulator(mp.Process):
                 self.restart()
             else:
                 self.seq += 1
-

@@ -54,8 +54,8 @@ class ExpOp:
             # TODO need to remove this. It is sufficient to put a
             # terminal here, and it is not necessary to set
             # entry_from_next[k] to be zero.
-            for k in entry_from_next.keys():
-                entry_from_next[k] = 0.0
+            #for k in entry_from_next.keys():
+            #    entry_from_next[k] = None
             # Put a terminal.
             entry_from_next["terminal"] = "incomplete"
         else:
@@ -163,6 +163,7 @@ class BatchAssembler:
                 mem.push(hist_fill)
 
         mem.push(m)
+        #print('mem.push(m), len = {}, length_limit = {}'.format(len(mem), self.memory_length_limit))
         # Keep memory size upper-bounded.
         if len(mem) >= self.memory_length_limit:
             mem.pop()
@@ -173,8 +174,9 @@ class BatchAssembler:
             self.total_count += 1
 
         # Check whether the condition satisfies.
+        #print("name = {}, holdbatch = {}, totalcount = {}, T = {}, num_extra = {}, counts[agent] = {}, batchsize = {}".format(agent, hold_batch, self.total_count, self.T, self.num_extra, self.counts[agent], self.batchsize))
         if not hold_batch and self.total_count >= self.batchsize:
-            # print("Get one full batch, loop_count = %d" % self.loop_count)
+            #print("Get one full batch, loop_count = %d" % self.loop_count)
             return self.get_batch()
 
     def feeds(self, ms, ordered=False, **kwargs):
@@ -214,4 +216,3 @@ class BatchAssembler:
         print("Assembler: Limit: %d, Min: %d [%s], Max: %d [%s], Avg: %.2f[%d]"
               % (self.memory_length_limit, min_mem_len, min_agent,
                  max_mem_len, max_agent, avg_mem_len / cnt, cnt))
-
